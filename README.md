@@ -185,15 +185,3 @@ Contributions are welcome! If you have ideas for new status line segments, color
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
----
-
-<div align="center">
-
-**Built by [Prashant Rathi](https://github.com/rathi-prashant)**
-
-Principal Architect at McKinsey | AI & GenAI Architect | Speaker & Mentor
-
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/prashantrathi1/)
-[![GitHub](https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/rathi-prashant)
-
-</div>
