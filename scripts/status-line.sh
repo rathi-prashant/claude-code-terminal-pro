@@ -1,18 +1,18 @@
 #!/bin/bash
 
 # Claude Code Status Line Script - Gruvbox Dark Theme
-# Format: [Model Name] | [Progress Bar] | [tokens_used/total_tokens] | [directory] | [git branch]
+# Format: [Model Name] | [Progress Bar] pct | tokens | $cost | [directory] | [git branch] | version
 
 # Read JSON input
 input=$(cat)
 
 # Extract values
 model_name=$(echo "$input" | jq -r '.model.display_name')
-total_input_tokens=$(echo "$input" | jq -r '.context_window.total_input_tokens // 0')
-total_output_tokens=$(echo "$input" | jq -r '.context_window.total_output_tokens // 0')
 context_window_size=$(echo "$input" | jq -r '.context_window.context_window_size // 200000')
 used_percentage=$(echo "$input" | jq -r '.context_window.used_percentage // 0')
 cwd=$(echo "$input" | jq -r '.workspace.current_dir')
+version=$(echo "$input" | jq -r '.version // empty')
+total_cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
 
 # Gruvbox Dark color palette
 MODEL_COLOR="\033[38;2;86;182;194m"       # Model name - #56B6C2 (bright teal)
@@ -23,10 +23,14 @@ PERCENTAGE_COLOR="\033[38;2;251;241;199m" # Percentage number - Bright foregroun
 TOKEN_COLOR="\033[38;2;224;175;104m"      # Token budget - #E0AF68
 GIT_COLOR="\033[38;2;143;175;209m"        # Git branch - #8FAFD1
 DIR_COLOR="\033[38;2;152;195;121m"        # Directory - #98C379
+COST_COLOR="\033[38;2;211;134;155m"       # Cost - #D3869B (soft pink)
+VERSION_COLOR="\033[38;2;102;92;84m"      # Version - #665C54 (dim gray)
 RESET="\033[0m"
 
-# Calculate tokens used from percentage and context window size
-# This ensures accuracy when the cumulative totals don't match the current context
+# Calculate real token usage from used_percentage (includes thinking/reasoning tokens)
+# used_percentage is the source of truth from Claude Code - it accounts for all token
+# types including thinking tokens, cache tokens, etc. Using total_input_tokens +
+# total_output_tokens would undercount since thinking tokens are not reported there.
 if [ "$used_percentage" != "null" ] && [ "$used_percentage" != "0" ]; then
     tokens_used=$(echo "scale=0; $used_percentage * $context_window_size / 100" | bc)
 else
@@ -37,69 +41,54 @@ fi
 status_line=""
 
 # 1. Model name
-if [ -n "$model_name" ]; then
-    status_line+=$(printf "${MODEL_COLOR}✦ %s${RESET}" "$model_name")
-fi
+[ -n "$model_name" ] && status_line+=$(printf "${MODEL_COLOR}✦ %s${RESET}" "$model_name")
 
-# 2. Progress bar for token usage (20-segment lightweight bar)
+# 2. Progress bar for token usage (20-segment, each = 5%)
 if [ -n "$used_percentage" ] && [ "$used_percentage" != "null" ]; then
-    # DESIGN OPTIONS (glyph choices):
-    # Option 1: ▰▱ (horizontal rectangles) - clean, proportional, good contrast
-    # Option 2: ━─ (box drawing lines) - minimal, very lightweight
-    # Option 3: ■□ (large squares) - bigger, more visible
-    #
-    # IMPLEMENTED: ■□ (large squares, more visible)
-    # 20 segments, each representing 5% of context window
-
-    # Build 12-segment progress bar
     bar="${BRACKET_COLOR}[${RESET}"
-    num_segments=20
-    segment_size=5  # 100% / 20 segments
-
     for segment in {1..20}; do
-        segment_threshold=$(echo "scale=2; $segment * $segment_size" | bc)
-
-        if (( $(echo "$used_percentage >= $segment_threshold" | bc -l) )); then
-            # Fully filled segment
+        threshold=$(echo "scale=2; $segment * 5" | bc)
+        if (( $(echo "$used_percentage >= $threshold" | bc -l) )); then
             bar+="${FILLED_BAR_COLOR}■${RESET}"
         else
-            # Empty segment
             bar+="${EMPTY_BAR_COLOR}□${RESET}"
         fi
     done
-
     bar+="${BRACKET_COLOR}]${RESET}"
-
-    # Format percentage as integer with emphasized styling
-    percentage_int=$(printf "%.0f" "$used_percentage")
-
-    status_line+=$(printf " | %s ${PERCENTAGE_COLOR}%s%%${RESET}" "$bar" "$percentage_int")
+    pct=$(printf "%.0f" "$used_percentage")
+    status_line+=$(printf " | %s ${PERCENTAGE_COLOR}%s%%${RESET}" "$bar" "$pct")
 fi
 
-# 3. Token count (tokens_used/total_tokens)
+# 3. Token count (granular, derived from used_percentage)
 if [ "$tokens_used" -gt 0 ]; then
-    # Format tokens in thousands with 'k' suffix
-    tokens_used_k=$(echo "scale=0; $tokens_used / 1000" | bc)
-    context_window_k=$(echo "scale=0; $context_window_size / 1000" | bc)
-    status_line+=$(printf " | ${TOKEN_COLOR}↯ %sk/%sk${RESET}" "$tokens_used_k" "$context_window_k")
+    ctx_k=$(echo "scale=0; $context_window_size / 1000" | bc)
+    tok_k=$(echo "scale=0; $tokens_used / 1000" | bc)
+    status_line+=$(printf " | ${TOKEN_COLOR}↯ %sk/%sk${RESET}" "$tok_k" "$ctx_k")
 fi
 
-# 4. Directory (formatted as ./directory_name)
+# 4. Cost (estimated API equivalent)
+if [ "$total_cost" != "0" ] && [ "$total_cost" != "null" ]; then
+    cost_fmt=$(printf "%.2f" "$total_cost")
+    status_line+=$(printf " | ${COST_COLOR}\$ %s USD${RESET}" "$cost_fmt")
+fi
+
+# 5. Directory
 if [ -n "$cwd" ]; then
     dir_name=$(basename "$cwd")
     status_line+=$(printf " | ${DIR_COLOR}◆ %s${RESET}" "$dir_name")
 fi
 
-# 5. Git branch (with branch icon)
+# 6. Git branch
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     cd "$cwd" 2>/dev/null
     if git rev-parse --git-dir > /dev/null 2>&1; then
         branch=$(git --no-optional-locks branch --show-current 2>/dev/null)
-        if [ -n "$branch" ]; then
-            status_line+=$(printf " | ${GIT_COLOR}⎇ %s${RESET}" "$branch")
-        fi
+        [ -n "$branch" ] && status_line+=$(printf " | ${GIT_COLOR}⎇ %s${RESET}" "$branch")
     fi
 fi
+
+# 7. Version
+[ -n "$version" ] && status_line+=$(printf " | ${VERSION_COLOR}v%s${RESET}" "$version")
 
 # Output the status line
 echo -e "$status_line"
